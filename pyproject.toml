@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "index-compression-codec"
+version = "0.1.0"
+description = "A postings-list compression codec implementing delta encoding, varint, and bitpacking for scalable inverted indexes."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Juan Martos Cuevas", email = "martoscuevasjuan@gmail.com" }]
+dependencies = []
+
+[project.scripts]
+index-compression-codec = "index_compression_codec.__main__:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "mypy>=1.10,<2",
+    "ruff>=0.5,<1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/index_compression_codec"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_ignores = true
