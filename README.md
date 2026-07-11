@@ -161,6 +161,15 @@ index-compression-codec lookup ./index-compressed search
 index-compression-codec benchmark ./index-compressed --sample-size 5000
 ```
 
+Try it end-to-end against the tiny fixture checked into `samples/tiny_example/`
+(a 3-document, 82-term index already built by `inverted-index-builder`):
+
+```bash
+index-compression-codec compress samples/tiny_example/index --output-dir /tmp/compressed-example
+index-compression-codec stats /tmp/compressed-example
+index-compression-codec lookup /tmp/compressed-example search
+```
+
 It can also be invoked as a module: `python -m index_compression_codec compress ...`.
 
 ## Data formats
