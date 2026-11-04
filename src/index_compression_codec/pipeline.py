@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from index_compression_codec.bitpacking import DEFAULT_BLOCK_SIZE
+from index_compression_codec.block_max import BlockMaxParams, encode_block_postings_list
 from index_compression_codec.models import CompressionStats, Posting, PostingsList, TermEntry
 from index_compression_codec.postings_codec import DEFAULT_BITPACK_THRESHOLD, encode_postings_list
 from index_compression_codec.serialization import (
@@ -54,6 +55,16 @@ def _parse_postings_line(line: str) -> PostingsList:
     )
 
 
+def _read_document_lengths(documents_path: Path) -> dict[int, int]:
+    lengths: dict[int, int] = {}
+    with documents_path.open("r", encoding="utf-8") as documents_file:
+        for line in documents_file:
+            if line.strip():
+                data = json.loads(line)
+                lengths[int(data["doc_id"])] = int(data["length"])
+    return lengths
+
+
 class CompressionPipeline:
     """Comprime un índice de `inverted-index-builder` de forma streaming.
 
@@ -69,13 +80,18 @@ class CompressionPipeline:
         *,
         bitpack_threshold: int = DEFAULT_BITPACK_THRESHOLD,
         block_size: int = DEFAULT_BLOCK_SIZE,
+        block_max: BlockMaxParams | None = None,
     ) -> None:
+        """`block_max` activa el formato v2 por bloques con cotas por bloque
+        (`block_max.py`); sin él se escribe el formato v1 de siempre, que es
+        el que entienden todos los lectores anteriores a 0.2.0."""
         if bitpack_threshold <= 0:
             raise ValueError(f"bitpack_threshold debe ser positivo, recibido {bitpack_threshold}")
         if block_size <= 0:
             raise ValueError(f"block_size debe ser positivo, recibido {block_size}")
         self._bitpack_threshold = bitpack_threshold
         self._block_size = block_size
+        self._block_max = block_max
 
     def compress(self, source_index_dir: Path, output_dir: Path) -> CompressionStats:
         postings_path = source_index_dir / SOURCE_POSTINGS_FILENAME
@@ -89,6 +105,10 @@ class CompressionPipeline:
 
         output_dir.mkdir(parents=True, exist_ok=True)
         source_stats: dict[str, Any] = json.loads(stats_path.read_text(encoding="utf-8"))
+        average_document_length = float(source_stats["average_document_length"])
+        document_lengths = (
+            _read_document_lengths(documents_path) if self._block_max is not None else {}
+        )
 
         term_entries: list[TermEntry] = []
         uncompressed_bytes = 0
@@ -108,11 +128,22 @@ class CompressionPipeline:
                 uncompressed_bytes += len(raw_line.encode("utf-8"))
 
                 postings_list = _parse_postings_line(line)
-                encoded = encode_postings_list(
-                    postings_list,
-                    bitpack_threshold=self._bitpack_threshold,
-                    block_size=self._block_size,
-                )
+                max_score: float | None = None
+                if self._block_max is None:
+                    encoded = encode_postings_list(
+                        postings_list,
+                        bitpack_threshold=self._bitpack_threshold,
+                        block_size=self._block_size,
+                    )
+                else:
+                    encoded, max_score = encode_block_postings_list(
+                        postings_list,
+                        document_lengths,
+                        average_document_length,
+                        params=self._block_max,
+                        block_size=self._block_size,
+                        bitpack_threshold=self._bitpack_threshold,
+                    )
                 binary_file.write(encoded)
 
                 term_entries.append(
@@ -121,6 +152,7 @@ class CompressionPipeline:
                         offset=offset,
                         length=len(encoded),
                         document_frequency=postings_list.document_frequency,
+                        max_score=max_score,
                     )
                 )
                 offset += len(encoded)
@@ -141,7 +173,11 @@ class CompressionPipeline:
         write_terms_directory(output_dir, term_entries)
         write_compression_stats(output_dir, stats)
         write_manifest(
-            output_dir, block_size=self._block_size, bitpack_threshold=self._bitpack_threshold
+            output_dir,
+            block_size=self._block_size,
+            bitpack_threshold=self._bitpack_threshold,
+            block_max=self._block_max,
+            average_document_length=average_document_length if self._block_max else None,
         )
 
         return stats

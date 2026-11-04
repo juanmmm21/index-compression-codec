@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from index_compression_codec.bitpacking import DEFAULT_BLOCK_SIZE
+from index_compression_codec.block_max import DEFAULT_BLOCK_MAX_SIZE, BlockMaxParams
 from index_compression_codec.pipeline import CompressionPipeline
 from index_compression_codec.postings_codec import DEFAULT_BITPACK_THRESHOLD
 from index_compression_codec.serialization import CompressedIndexReader, read_compression_stats
@@ -42,9 +43,19 @@ def _build_parser() -> argparse.ArgumentParser:
     compress_parser.add_argument(
         "--block-size",
         type=int,
-        default=DEFAULT_BLOCK_SIZE,
-        help="Tamaño de bloque de bitpacking",
+        default=None,
+        help=(
+            f"Tamaño de bloque (por defecto {DEFAULT_BLOCK_SIZE} en v1 y "
+            f"{DEFAULT_BLOCK_MAX_SIZE} con --block-max)"
+        ),
     )
+    compress_parser.add_argument(
+        "--block-max",
+        action="store_true",
+        help="Formato v2 por bloques con la puntuación BM25 máxima de cada bloque",
+    )
+    compress_parser.add_argument("--k1", type=float, default=1.5, help="k1 BM25 de las cotas")
+    compress_parser.add_argument("--b", type=float, default=0.75, help="b BM25 de las cotas")
 
     stats_parser = subparsers.add_parser(
         "stats", help="Muestra las métricas de compresión de un índice ya comprimido"
@@ -77,8 +88,12 @@ def _run_compress(args: argparse.Namespace) -> int:
         print(f"Error: no existe {source_index_dir}", file=sys.stderr)
         return 2
 
+    block_max = BlockMaxParams(k1=args.k1, b=args.b) if args.block_max else None
+    default_block_size = DEFAULT_BLOCK_SIZE if block_max is None else DEFAULT_BLOCK_MAX_SIZE
     pipeline = CompressionPipeline(
-        bitpack_threshold=args.bitpack_threshold, block_size=args.block_size
+        bitpack_threshold=args.bitpack_threshold,
+        block_size=args.block_size if args.block_size is not None else default_block_size,
+        block_max=block_max,
     )
     stats = pipeline.compress(source_index_dir, args.output_dir)
 

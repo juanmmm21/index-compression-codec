@@ -68,22 +68,30 @@ class TermEntry:
     offset: int
     length: int
     document_frequency: int
+    max_score: float | None = None
+    """Solo en el formato v2 (`block_max.py`): cota superior de `tf_part` BM25
+    del término en todo el índice, la que usa WAND sin abrir el blob."""
 
     def to_json_dict(self) -> dict[str, Any]:
-        return {
+        data: dict[str, Any] = {
             "term": self.term,
             "offset": self.offset,
             "length": self.length,
             "document_frequency": self.document_frequency,
         }
+        if self.max_score is not None:
+            data["max_score"] = self.max_score
+        return data
 
     @staticmethod
     def from_json_dict(data: dict[str, Any]) -> TermEntry:
+        max_score = data.get("max_score")
         return TermEntry(
             term=str(data["term"]),
             offset=int(data["offset"]),
             length=int(data["length"]),
             document_frequency=int(data["document_frequency"]),
+            max_score=float(max_score) if max_score is not None else None,
         )
 
 
