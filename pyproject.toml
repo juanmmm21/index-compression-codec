@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "index-compression-codec"
-version = "0.1.0"
+version = "0.2.0"
 description = "A postings-list compression codec implementing delta encoding, varint, and bitpacking for scalable inverted indexes."
 readme = "README.md"
 requires-python = ">=3.11"

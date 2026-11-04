@@ -122,6 +122,7 @@ src/index_compression_codec/
 ├── varint.py               # LEB128 varint primitives + VarintBlockCodec
 ├── bitpacking.py             # block-based bitpacking primitives + PackedBlockCodec
 ├── postings_codec.py           # binary format of a single postings list (encode/decode)
+├── block_max.py                 # v2 block layout with per-block BM25 upper bounds
 ├── pipeline.py                   # CompressionPipeline: streams postings.jsonl -> postings.bin
 ├── serialization.py                # on-disk format (manifest, terms directory) + CompressedIndexReader
 └── __main__.py                       # CLI (compress, stats, lookup, benchmark)
@@ -237,6 +238,71 @@ separately from its gap block rather than as "a gap from zero": folding it
 into the first bitpacked block would force that whole block to use the bit
 width of the raw absolute value — usually far larger than the real gaps
 between consecutive postings — inflating the block for no benefit.
+
+### Block-max layout (format version 2)
+
+Added in `0.2.0` and opt-in: `index-compression-codec compress ... --block-max`
+writes `format_version: 2`; without the flag the output is exactly the v1
+format above, so every pre-0.2.0 reader keeps working. `CompressedIndexReader`
+reads both versions.
+
+Each term's posting list is split into blocks of `block_size` postings (64 by
+default with `--block-max`), and a block directory is written in front of the
+data. For every block it records where the block ends (`last_doc_id`), how
+long it is, and upper bounds on what any document in it can score. That is
+what Block-Max WAND in `bm25-ranking-engine` needs: skip a whole block without
+decoding it when its bound cannot reach the current top-k threshold, and find
+the next block without reading the current one.
+
+The manifest records the BM25 parameters the bounds were computed with:
+
+```json
+{
+  "format_version": 2,
+  "block_size": 64,
+  "bitpack_threshold": 64,
+  "block_max": {"scoring": "bm25", "k1": 1.5, "b": 0.75, "average_document_length": 187.5},
+  "...": "same file names as v1"
+}
+```
+
+`terms.jsonl` lines gain a `max_score` field — the bound for the whole term —
+so WAND can use it without opening the blob:
+
+```json
+{"term": "search", "offset": 15823, "length": 61, "document_frequency": 2, "max_score": 1.8211}
+```
+
+Each term blob in `postings.bin`:
+
+```text
+varint  num_postings
+varint  num_blocks
+-- block directory, one entry per block --
+varint  last_doc_id_delta     block's last doc_id minus the previous block's (first: minus 0)
+varint  block_postings
+varint  block_byte_length
+varint  max_term_frequency
+varint  min_document_length
+4 bytes max_score             float32 little-endian, rounded up
+-- blocks, same order --
+byte    encoding_mode         0 = VARINT, 1 = PACKED (doc_id gaps only)
+varint  first_doc_id_delta    first doc_id minus the previous block's last (first block: doc_id + 1)
+...     doc_id_gaps           block_postings - 1 values
+...     term_frequencies      block_postings values, varint
+-- per posting: positions exactly as in v1 --
+```
+
+What the bound means: BM25 for one term is `idf(t) * tf_part(tf, len)` with
+`tf_part = tf * (k1 + 1) / (tf + k1 * (1 - b + b * len / avgdl))`. `idf`
+depends on the whole corpus (for a sharded index, the global corpus, not the
+shard), so it is not baked in: `max_score` is the exact maximum of `tf_part`
+over the block's real postings, and the reader multiplies by its own idf. A
+reader using different `k1`/`b` cannot use `max_score`, but can use
+`tf_part(max_term_frequency, min_document_length)`, which bounds the block for
+any parameters (`tf_part` grows with `tf` and shrinks with `len`). `max_score`
+is rounded **up** to float32: a bound that underestimates by rounding would
+make Block-Max WAND drop a document that belonged in the top-k.
 
 **`compression_stats.json`** — corpus-wide compression metrics:
 
